@@ -1,111 +1,111 @@
-name: CI/CD
+# name: CI/CD
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
 
-permissions:
-  id-token: write   # OIDC token
-  contents: read    # checkout
+# permissions:
+#   id-token: write   # OIDC token
+#   contents: read    # checkout
 
-concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: false
+# concurrency:
+#   group: deploy-${{ github.ref }}
+#   cancel-in-progress: false
 
-jobs:
-  ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+# jobs:
+#   ci:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
+#       - uses: actions/setup-node@v4
+#         with:
+#           node-version: 20
+#           cache: npm
 
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test --if-present
-      - run: npm run build
+#       - run: npm ci
+#       - run: npm run lint
+#       - run: npm run test --if-present
+#       - run: npm run build
 
-  deploy:
-    needs: ci
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment: production
-    env:
-      APP_NAME: next-japan
-      APP_DIR: ${{ secrets.APP_DIR || '/var/www/next-japan' }}          # e.g. /var/www/next-japan
-      APP_PORT: ${{ secrets.APP_PORT || '3000' }}
-    steps:
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+#   deploy:
+#     needs: ci
+#     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+#     runs-on: ubuntu-latest
+#     environment: production
+#     env:
+#       APP_NAME: next-japan
+#       APP_DIR: ${{ secrets.APP_DIR || '/var/www/next-japan' }}          # e.g. /var/www/next-japan
+#       APP_PORT: ${{ secrets.APP_PORT || '3000' }}
+#     steps:
+#       - name: Setup SSH key
+#         run: |
+#           mkdir -p ~/.ssh
+#           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+#           chmod 600 ~/.ssh/id_rsa
+#           ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Deploy with PM2
-        run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -p "${{ secrets.SSH_PORT || 22 }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "APP_NAME='$APP_NAME' APP_DIR='$APP_DIR' APP_PORT='$APP_PORT' REPO='https://github.com/${{ github.repository }}.git' SHA='${{ github.sha }}' bash -s" <<'EOF'
-          set -euo pipefail
+#       - name: Deploy with PM2
+#         run: |
+#           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -p "${{ secrets.SSH_PORT || 22 }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+#             "APP_NAME='$APP_NAME' APP_DIR='$APP_DIR' APP_PORT='$APP_PORT' REPO='https://github.com/${{ github.repository }}.git' SHA='${{ github.sha }}' bash -s" <<'EOF'
+#           set -euo pipefail
 
-          # Non-interactive SSH doesn't load ~/.bashrc, so find node manually
-          export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:/usr/local/bin:$PATH"
-          export NVM_DIR="$HOME/.nvm"
-          set +u  # nvm is not compatible with nounset
-          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-          command -v fnm >/dev/null && eval "$(fnm env)"
+#           # Non-interactive SSH doesn't load ~/.bashrc, so find node manually
+#           export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:/usr/local/bin:$PATH"
+#           export NVM_DIR="$HOME/.nvm"
+#           set +u  # nvm is not compatible with nounset
+#           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+#           command -v fnm >/dev/null && eval "$(fnm env)"
 
-          # Still no node? Install Node 20 via nvm (user-level, no sudo needed)
-          if ! command -v npm >/dev/null; then
-            echo "npm not found, installing Node 20 via nvm..."
-            curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash
-            . "$NVM_DIR/nvm.sh"
-            nvm install 20
-            nvm alias default 20
-          fi
-          set -u
-          echo "Using node $(node -v), npm $(npm -v)"
+#           # Still no node? Install Node 20 via nvm (user-level, no sudo needed)
+#           if ! command -v npm >/dev/null; then
+#             echo "npm not found, installing Node 20 via nvm..."
+#             curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash
+#             . "$NVM_DIR/nvm.sh"
+#             nvm install 20
+#             nvm alias default 20
+#           fi
+#           set -u
+#           echo "Using node $(node -v), npm $(npm -v)"
 
-          # Ensure APP_DIR exists and is writable by the deploy user
-          if ! mkdir -p "$APP_DIR" 2>/dev/null || [ ! -w "$APP_DIR" ]; then
-            echo "No write access to $APP_DIR, trying passwordless sudo..."
-            if sudo -n true 2>/dev/null; then
-              sudo mkdir -p "$APP_DIR"
-              sudo chown -R "$(id -u):$(id -g)" "$APP_DIR"
-            else
-              echo "ERROR: $(whoami) cannot write to $APP_DIR and has no passwordless sudo."
-              echo "Run once on the server: sudo mkdir -p $APP_DIR && sudo chown -R $(whoami):$(whoami) $APP_DIR"
-              echo "Or set the APP_DIR secret to a path under \$HOME, e.g. $HOME/next-japan"
-              exit 1
-            fi
-          fi
+#           # Ensure APP_DIR exists and is writable by the deploy user
+#           if ! mkdir -p "$APP_DIR" 2>/dev/null || [ ! -w "$APP_DIR" ]; then
+#             echo "No write access to $APP_DIR, trying passwordless sudo..."
+#             if sudo -n true 2>/dev/null; then
+#               sudo mkdir -p "$APP_DIR"
+#               sudo chown -R "$(id -u):$(id -g)" "$APP_DIR"
+#             else
+#               echo "ERROR: $(whoami) cannot write to $APP_DIR and has no passwordless sudo."
+#               echo "Run once on the server: sudo mkdir -p $APP_DIR && sudo chown -R $(whoami):$(whoami) $APP_DIR"
+#               echo "Or set the APP_DIR secret to a path under \$HOME, e.g. $HOME/next-japan"
+#               exit 1
+#             fi
+#           fi
 
-          if [ ! -d "$APP_DIR/.git" ]; then
-            git clone "$REPO" "$APP_DIR"
-          fi
+#           if [ ! -d "$APP_DIR/.git" ]; then
+#             git clone "$REPO" "$APP_DIR"
+#           fi
 
-          cd "$APP_DIR"
-          git fetch --all --prune
-          git reset --hard "$SHA"
+#           cd "$APP_DIR"
+#           git fetch --all --prune
+#           git reset --hard "$SHA"
 
-          npm ci
-          npm run build
+#           npm ci
+#           npm run build
 
-          command -v pm2 >/dev/null || npm i -g pm2
+#           command -v pm2 >/dev/null || npm i -g pm2
 
-          if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-            pm2 reload "$APP_NAME" --update-env
-          else
-            PORT="$APP_PORT" pm2 start npm --name "$APP_NAME" -- start -- -p "$APP_PORT"
-          fi
-          pm2 save
-          EOF
+#           if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+#             pm2 reload "$APP_NAME" --update-env
+#           else
+#             PORT="$APP_PORT" pm2 start npm --name "$APP_NAME" -- start -- -p "$APP_PORT"
+#           fi
+#           pm2 save
+#           EOF
 
-      - name: Cleanup
-        if: always()
-        run: rm -f ~/.ssh/id_rsa
+#       - name: Cleanup
+#         if: always()
+#         run: rm -f ~/.ssh/id_rsa
