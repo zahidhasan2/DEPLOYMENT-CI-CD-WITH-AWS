@@ -125,7 +125,19 @@ jobs:
           git fetch --all --prune
           git reset --hard "$SHA"
 
-          npm ci
+          # Ensure at least 2GB swap space to prevent memory exhaust (OOM Kill 137) on t2/t3.micro
+          if [ "$(free -m | awk '/^Swap:/ {print $2}')" -lt 1024 ]; then
+            echo "Creating 2GB swap file to prevent OOM killer..."
+            if sudo -n true 2>/dev/null; then
+              sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile 2>/dev/null || true
+            fi
+          fi
+
+          export NODE_OPTIONS="--max-old-space-size=2048"
+          npm ci --prefer-offline --no-audit
           npm run build
 
           command -v pm2 >/dev/null || npm i -g pm2
