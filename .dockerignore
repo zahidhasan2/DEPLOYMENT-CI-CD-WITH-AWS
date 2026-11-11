@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+.next
+out
+coverage
+Dockerfile*
+.dockerignore
+README.md
+*.log
+.env*
+.sonar-project.properties
+.vscode
+.idea

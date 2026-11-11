@@ -1,0 +1,143 @@
+name: CI/CD (AWS OIDC)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # needed to request the GitHub OIDC token
+  contents: read    # needed for checkout
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test --if-present
+      - run: npm run build
+
+  deploy:
+    needs: ci
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      APP_NAME: next-japan
+      APP_DIR: ${{ vars.APP_DIR || '/var/www/next-japan' }}
+      APP_PORT: ${{ vars.APP_PORT || '3000' }}
+      SSH_USER: ${{ vars.SSH_USER || 'ubuntu' }}
+      SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+    steps:
+      # 1. Exchange the GitHub OIDC token for short-lived AWS credentials (no AWS keys stored)
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: gh-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      # 2. Look up the instance's public address
+      - name: Resolve EC2 host
+        id: host
+        run: |
+          HOST=$(aws ec2 describe-instances \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          if [ -z "$HOST" ] || [ "$HOST" = "None" ]; then
+            echo "ERROR: instance $EC2_INSTANCE_ID has no public IP"; exit 1
+          fi
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+
+      # 3. Create a throwaway SSH key and push it via EC2 Instance Connect (valid 60s)
+      - name: Push ephemeral SSH key (EC2 Instance Connect)
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -N "" -q -f ~/.ssh/ephemeral
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --instance-os-user "$SSH_USER" \
+            --ssh-public-key file://$HOME/.ssh/ephemeral.pub
+          ssh-keyscan -p "$SSH_PORT" -H "${{ steps.host.outputs.host }}" >> ~/.ssh/known_hosts
+
+      # 4. Deploy with PM2 (must start within 60s of the key push)
+      - name: Deploy with PM2
+        run: |
+          ssh -i ~/.ssh/ephemeral -p "$SSH_PORT" "$SSH_USER@${{ steps.host.outputs.host }}" \
+            "APP_NAME='$APP_NAME' APP_DIR='$APP_DIR' APP_PORT='$APP_PORT' REPO='https://github.com/${{ github.repository }}.git' SHA='${{ github.sha }}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          # Non-interactive SSH doesn't load ~/.bashrc, so find node manually
+          export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:/usr/local/bin:$PATH"
+          export NVM_DIR="$HOME/.nvm"
+          set +u  # nvm is not compatible with nounset
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          command -v fnm >/dev/null && eval "$(fnm env)"
+
+          if ! command -v npm >/dev/null; then
+            echo "npm not found, installing Node 20 via nvm..."
+            curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash
+            . "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm alias default 20
+          fi
+          set -u
+          echo "Using node $(node -v), npm $(npm -v)"
+
+          # Ensure APP_DIR exists and is writable
+          if ! mkdir -p "$APP_DIR" 2>/dev/null || [ ! -w "$APP_DIR" ]; then
+            if sudo -n true 2>/dev/null; then
+              sudo mkdir -p "$APP_DIR"
+              sudo chown -R "$(id -u):$(id -g)" "$APP_DIR"
+            else
+              echo "ERROR: $(whoami) cannot write to $APP_DIR and has no passwordless sudo."
+              exit 1
+            fi
+          fi
+
+          if [ ! -d "$APP_DIR/.git" ]; then
+            git clone "$REPO" "$APP_DIR"
+          fi
+
+          cd "$APP_DIR"
+          git fetch --all --prune
+          git reset --hard "$SHA"
+
+          npm ci
+          npm run build
+
+          command -v pm2 >/dev/null || npm i -g pm2
+
+          if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+            pm2 reload "$APP_NAME" --update-env
+          else
+            PORT="$APP_PORT" pm2 start npm --name "$APP_NAME" -- start -- -p "$APP_PORT"
+          fi
+          pm2 save
+          EOF
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ~/.ssh/ephemeral ~/.ssh/ephemeral.pub

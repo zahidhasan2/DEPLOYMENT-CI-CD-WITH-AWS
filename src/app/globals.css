@@ -1,0 +1,81 @@
+@import "tailwindcss";
+@plugin "daisyui";
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+:root {
+  --corona-gradient-start: #6a11cb;
+  --corona-gradient-end: #2575fc;
+  --gray-dark: #343a40;
+
+  --gradient-radial: radial-gradient(var(--tw-gradient-stops));
+  --gradient-conic: conic-gradient(
+    from 180deg at 50% 50%,
+    var(--tw-gradient-stops)
+  );
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+.badge-outline-success {
+  @apply border border-green-500 text-green-500 bg-transparent;
+}
+
+.badge-outline-warning {
+  @apply border border-yellow-500 text-yellow-500 bg-transparent;
+}
+
+.badge-outline-danger {
+  @apply border border-red-500 text-red-500 bg-transparent;
+}
+
+/* Specific styles for .icon-box-* and .icon-item might need to be translated to Tailwind */
+.icon-box-success {
+  @apply p-3 rounded-full bg-green-500/20 text-green-500 flex items-center justify-center;
+}
+
+.icon-box-danger {
+  @apply p-3 rounded-full bg-red-500/20 text-red-500 flex items-center justify-center;
+}
+
+.icon-item {
+  @apply text-lg; /* Adjust size as needed */
+}
+
+.preview-icon {
+  @apply p-3 rounded-full flex items-center justify-center;
+}
+
+.preview-icon.bg-primary {
+  @apply bg-blue-500/20 text-blue-500;
+}
+.preview-icon.bg-success {
+  @apply bg-green-500/20 text-green-500;
+}
+.preview-icon.bg-info {
+  @apply bg-cyan-500/20 text-cyan-500;
+}
+.preview-icon.bg-danger {
+  @apply bg-red-500/20 text-red-500;
+}
+.preview-icon.bg-warning {
+  @apply bg-yellow-500/20 text-yellow-500;
+}

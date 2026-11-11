@@ -1,0 +1,16 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: next-japan-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app               # live code changes -> hot reload
+      - /app/node_modules    # keep container's node_modules (don't overwrite with host's)
+      - /app/.next           # keep build cache inside container
+    environment:
+      - NODE_ENV=development
+    stdin_open: true
+    tty: true
